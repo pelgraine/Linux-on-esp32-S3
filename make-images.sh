@@ -21,7 +21,10 @@ set -euo pipefail
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 OUT="$REPO/images"
-PROFILE=esp32s3_devkit_c1_16m
+# Which buildroot profile to package. The devkit is the default; the T-Deck
+# Pro build sets PROFILE=esp32s3_tdeck_pro (and KCONF, below) in the
+# environment, which is how the CI workflow selects it.
+PROFILE="${PROFILE:-esp32s3_devkit_c1_16m}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -168,7 +171,7 @@ echo "    clean"
 # ~117K and moved it from 0x4037c000 to 0x4037f000, which is exactly how this
 # was found, after a long hunt. Never ship that silently again: check it here.
 echo "==> checking Linux vector address against the firmware"
-KCONF="$REPO/new-files/board/espressif/esp32s3/devkit_c1_16m_linux.config"
+KCONF="${KCONF:-$REPO/new-files/board/espressif/esp32s3/devkit_c1_16m_linux.config}"
 FW_ELF="$NA/build/network_adapter.elf"
 
 # Read the symbol's address out of the firmware ELF without needing the xtensa

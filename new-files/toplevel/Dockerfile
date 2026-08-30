@@ -52,6 +52,7 @@ RUN git clone https://github.com/jcmvbkbc/esp32-linux-build /work/esp32-linux-bu
 # 16MB/8MB-PSRAM board profile (upstream only ships the 8MB one).
 RUN cp /work/local-changes/new-files/toplevel/apply-local-changes.sh \
        /work/local-changes/new-files/toplevel/devkit-c1-16m.conf \
+       /work/local-changes/new-files/toplevel/tdeck-pro.conf \
        /work/esp32-linux-build/ \
     && ln -s /work/local-changes /work/esp32-linux-build/local-changes
 

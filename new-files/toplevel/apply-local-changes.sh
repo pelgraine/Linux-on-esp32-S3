@@ -102,6 +102,7 @@ esp-hosted)
 		git apply "$LOCAL/patches/02-firmware-network-adapter.patch"
 		cp "$LOCAL/new-files/esp-hosted/network_adapter/partition_table.esp32s3.16m8r" \
 			"$LOCAL/new-files/esp-hosted/network_adapter/sdkconfig.defaults.esp32s3.16m8r" \
+			"$LOCAL/new-files/esp-hosted/network_adapter/sdkconfig.defaults.esp32s3.16m8r-quad" \
 			esp/esp_driver/network_adapter/
 		# sdkconfig.defaults.esp32s3 (no .16m8r) is patched too and does not
 		# live under main/, so it needs its own entry here or the commit
@@ -109,7 +110,8 @@ esp-hosted)
 		git add esp/esp_driver/network_adapter/main/ \
 			esp/esp_driver/network_adapter/sdkconfig.defaults.esp32s3 \
 			esp/esp_driver/network_adapter/partition_table.esp32s3.16m8r \
-			esp/esp_driver/network_adapter/sdkconfig.defaults.esp32s3.16m8r
+			esp/esp_driver/network_adapter/sdkconfig.defaults.esp32s3.16m8r \
+			esp/esp_driver/network_adapter/sdkconfig.defaults.esp32s3.16m8r-quad
 		git -c user.email="local@backup" -c user.name="local-backup" \
 			commit -m "network_adapter: this project's firmware (local-only, never push)"
 	fi

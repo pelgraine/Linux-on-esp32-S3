@@ -64,11 +64,14 @@ jobs:
             --tag linux-on-esp32s3:ci \
             .
 
+      # Arguments after the image name replace the Dockerfile's CMD, which
+      # selects the devkit profile; this builds the T-Deck Pro one instead.
       - name: Create build container
         run: |
           docker create \
             --name esp32-linux-builder \
-            linux-on-esp32s3:ci
+            linux-on-esp32s3:ci \
+            -c tdeck-pro.conf
 
       - name: Build Linux and firmware
         run: |
@@ -114,6 +117,10 @@ jobs:
     if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      # make-images.sh packages the devkit profile unless told otherwise.
+      PROFILE: esp32s3_tdeck_pro
+      KCONF: ${{ github.workspace }}/new-files/board/espressif/esp32s3/tdeck_pro_linux.config
 
     steps:
       - name: Checkout repository
