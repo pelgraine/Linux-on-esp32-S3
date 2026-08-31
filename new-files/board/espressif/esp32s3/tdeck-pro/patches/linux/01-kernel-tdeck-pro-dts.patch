@@ -1,14 +1,15 @@
 --- a/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	1970-01-01 00:00:00.000000000 +0000
-+++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-08-30 03:49:32.477373053 +0000
-@@ -0,0 +1,136 @@
++++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-08-31 07:26:29.807003841 +0000
+@@ -0,0 +1,216 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
-+ * LilyGo T-Deck Pro V1.1 (4G version) -- build one.
++ * LilyGo T-Deck Pro V1.1 (4G version) -- build two.
 + *
 + * What this describes: the USB-C port as the Linux console, the WiFi link
-+ * to the core-0 firmware, an I2C bus on GPIO 13/14, and the SD card slot
-+ * on SPI2. Nothing else on the board is touched: e-paper, keyboard, touch,
-+ * LoRa, GPS and the A7682E modem all stay unconfigured and unpowered.
++ * to the core-0 firmware, an I2C bus on GPIO 13/14 with the TCA8418
++ * keyboard controller on it, and the SD card slot on SPI2. Nothing else
++ * on the board is touched: e-paper, touch, LoRa, GPS and the A7682E modem
++ * all stay unconfigured and unpowered.
 + *
 + * Pin numbers come from the pelgraine/Meck T-Deck Pro variant and from
 + * LilyGo's V1.1 schematic (H693 H779 T-DeckPro V1.1 25-09-15).
@@ -16,6 +17,7 @@
 +/dts-v1/;
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/interrupt-controller/irq.h>
++#include <dt-bindings/input/input.h>
 +#include "gpio-esp32.h"
 +#include "esp32s3.dtsi"
 +
@@ -46,6 +48,80 @@
 +
 +		pinctrl-0 = <&i2c0_pins>;
 +		pinctrl-names = "default";
++
++		/*
++		 * TCA8418 keyboard controller, INT on GPIO15 (open drain,
++		 * active low; internal pull-up set in keyboard_pins).
++		 *
++		 * Matrix: the schematic wires ROW0..ROW3 and COL0..COL9. The
++		 * driver turns the chip's key number n (1..80) into
++		 * row = (n-1)/10, col = (n-1)%10. Meck's TCA8418Keyboard.h
++		 * and LilyGo's peri_keypad.cpp agree on which key sits at
++		 * which number; the table below is that mapping, one line
++		 * per physical row, right-hand key first (column 0 is the
++		 * right end of each row on this keyboard).
++		 *
++		 * Key names chosen for the five non-letter keys:
++		 *   Alt (row 2, col 9)   -> KEY_LEFTALT
++		 *   $   (row 2, col 1)   -> KEY_DOLLAR
++		 *   Sym (row 3, col 1)   -> KEY_RIGHTALT (the usual "third level" key)
++		 *   Mic (row 3, col 3)   -> KEY_VOICECOMMAND
++		 *   the two shift keys   -> KEY_RIGHTSHIFT (col 0), KEY_LEFTSHIFT (col 4)
++		 */
++		keyboard@34 {
++			compatible = "ti,tca8418";
++			reg = <0x34>;
++			interrupt-parent = <&gpio0>;
++			interrupts = <15 IRQ_TYPE_LEVEL_LOW>;
++
++			keypad,num-rows = <4>;
++			keypad,num-columns = <10>;
++			keypad,autorepeat;
++			linux,keymap = <
++				/* row 0: P O I U Y T R E W Q */
++				MATRIX_KEY(0, 0, KEY_P)
++				MATRIX_KEY(0, 1, KEY_O)
++				MATRIX_KEY(0, 2, KEY_I)
++				MATRIX_KEY(0, 3, KEY_U)
++				MATRIX_KEY(0, 4, KEY_Y)
++				MATRIX_KEY(0, 5, KEY_T)
++				MATRIX_KEY(0, 6, KEY_R)
++				MATRIX_KEY(0, 7, KEY_E)
++				MATRIX_KEY(0, 8, KEY_W)
++				MATRIX_KEY(0, 9, KEY_Q)
++				/* row 1: Backspace L K J H G F D S A */
++				MATRIX_KEY(1, 0, KEY_BACKSPACE)
++				MATRIX_KEY(1, 1, KEY_L)
++				MATRIX_KEY(1, 2, KEY_K)
++				MATRIX_KEY(1, 3, KEY_J)
++				MATRIX_KEY(1, 4, KEY_H)
++				MATRIX_KEY(1, 5, KEY_G)
++				MATRIX_KEY(1, 6, KEY_F)
++				MATRIX_KEY(1, 7, KEY_D)
++				MATRIX_KEY(1, 8, KEY_S)
++				MATRIX_KEY(1, 9, KEY_A)
++				/* row 2: Enter $ M N B V C X Z Alt */
++				MATRIX_KEY(2, 0, KEY_ENTER)
++				MATRIX_KEY(2, 1, KEY_DOLLAR)
++				MATRIX_KEY(2, 2, KEY_M)
++				MATRIX_KEY(2, 3, KEY_N)
++				MATRIX_KEY(2, 4, KEY_B)
++				MATRIX_KEY(2, 5, KEY_V)
++				MATRIX_KEY(2, 6, KEY_C)
++				MATRIX_KEY(2, 7, KEY_X)
++				MATRIX_KEY(2, 8, KEY_Z)
++				MATRIX_KEY(2, 9, KEY_LEFTALT)
++				/* row 3: RightShift Sym Space Mic LeftShift */
++				MATRIX_KEY(3, 0, KEY_RIGHTSHIFT)
++				MATRIX_KEY(3, 1, KEY_RIGHTALT)
++				MATRIX_KEY(3, 2, KEY_SPACE)
++				MATRIX_KEY(3, 3, KEY_VOICECOMMAND)
++				MATRIX_KEY(3, 4, KEY_LEFTSHIFT)
++			>;
++
++			pinctrl-0 = <&keyboard_pins>;
++			pinctrl-names = "default";
++		};
 +	};
 +};
 +
@@ -84,6 +160,10 @@
 +		pinctrl-single,pins = <
 +			PIN(13) FUN0_20MA_IE_WPU		/* SDA */
 +			PIN(14) FUN0_20MA_IE_WPU>;		/* SCL */
++	};
++	keyboard_pins: keyboard_pins {
++		pinctrl-single,pins = <
++			PIN(15) FUN0_20MA_IE_WPU>;		/* TCA8418 INT, open drain */
 +	};
 +	spi2_pins: spi2_pins {
 +		pinctrl-single,pins = <
