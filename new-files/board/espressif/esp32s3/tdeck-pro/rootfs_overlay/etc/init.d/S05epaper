@@ -1,0 +1,16 @@
+#!/bin/sh
+#
+# T-Deck Pro e-paper console: stop the console cursor from blinking. Every
+# blink is a framebuffer change, and on e-paper each change costs a refresh
+# of about 0.7 s, so a blinking cursor would keep the panel refreshing
+# forever. The cursor is still drawn; it just stays put.
+
+case "$1" in
+start)
+	[ -w /sys/class/graphics/fbcon/cursor_blink ] && \
+		echo 0 > /sys/class/graphics/fbcon/cursor_blink
+	;;
+stop)
+	;;
+esac
+exit 0

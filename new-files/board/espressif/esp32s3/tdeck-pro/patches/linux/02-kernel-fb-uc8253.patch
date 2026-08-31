@@ -1,0 +1,352 @@
+diff --git a/drivers/staging/fbtft/Kconfig b/drivers/staging/fbtft/Kconfig
+index 77ab44362..147748d14 100644
+--- a/drivers/staging/fbtft/Kconfig
++++ b/drivers/staging/fbtft/Kconfig
+@@ -192,6 +192,14 @@ config FB_TFT_UC1701
+ 	help
+ 	  Generic Framebuffer support for UC1701
+ 
++config FB_TFT_UC8253
++	tristate "FB driver for the UC8253 e-paper Controller (GDEQ031T10)"
++	depends on FB_TFT
++	help
++	  Framebuffer support for the UltraChip UC8253 e-paper controller
++	  driving the Good Display GDEQ031T10 240x320 panel, as used on the
++	  LilyGo T-Deck Pro.
++
+ config FB_TFT_UPD161704
+ 	tristate "FB driver for the uPD161704 LCD Controller"
+ 	depends on FB_TFT
+diff --git a/drivers/staging/fbtft/Makefile b/drivers/staging/fbtft/Makefile
+index e9cdf0f0a..4ec1dacfd 100644
+--- a/drivers/staging/fbtft/Makefile
++++ b/drivers/staging/fbtft/Makefile
+@@ -35,4 +35,5 @@ obj-$(CONFIG_FB_TFT_TINYLCD)     += fb_tinylcd.o
+ obj-$(CONFIG_FB_TFT_TLS8204)     += fb_tls8204.o
+ obj-$(CONFIG_FB_TFT_UC1611)      += fb_uc1611.o
+ obj-$(CONFIG_FB_TFT_UC1701)      += fb_uc1701.o
++obj-$(CONFIG_FB_TFT_UC8253)      += fb_uc8253.o
+ obj-$(CONFIG_FB_TFT_UPD161704)   += fb_upd161704.o
+diff --git a/drivers/staging/fbtft/fb_uc8253.c b/drivers/staging/fbtft/fb_uc8253.c
+new file mode 100644
+index 000000000..bc6cb987a
+--- /dev/null
++++ b/drivers/staging/fbtft/fb_uc8253.c
+@@ -0,0 +1,317 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * FB driver for the UltraChip UC8253 e-paper controller driving the
++ * Good Display GDEQ031T10 3.1" 240x320 panel (LilyGo T-Deck Pro).
++ *
++ * Every register write and delay below is taken from the GxEPD2 library's
++ * GxEPD2_310_GDEQ031T10 class (version 1.6.9), which is what Meck uses on
++ * this hardware, and from the way Meck calls it (GxEPDDisplay.cpp):
++ *
++ *   - hardware reset: RST high 10 ms, low 2 ms, high 10 ms
++ *   - init: soft reset (00 = 1E 0D, 1 ms) then panel setting (00 = 1F 0D)
++ *   - first image: both RAMs cleared to white, then one full refresh
++ *   - every later update: fast ("partial") refresh
++ *       write data to RAM 13 inside a partial window (91, 90 ..., 92)
++ *       E0 = 02, E5 = 79, 50 = D7, power on (04, busy), refresh (12, busy)
++ *       write the same data to RAM 10 (the "previous image")
++ *   - a soft reset + panel setting precedes each RAM write after a refresh
++ *     (GxEPD2 marks init as undone after every refresh; "reason unknown")
++ *
++ * The panel is always in portrait orientation, 240 wide by 320 high, which
++ * is the orientation of the T-Deck Pro; rotation is not supported. Panel
++ * RAM is one bit per pixel, 30 bytes per row, MSB first, 1 = white.
++ *
++ * The framebuffer is the usual fbtft 16 bpp RGB565 one. Rows that changed
++ * are converted to 1 bpp (a pixel is white when its green channel is at
++ * least half scale) and pushed through a partial window covering exactly
++ * those rows, so a one-line console update costs one row band, not the
++ * whole panel.
++ */
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/gpio/consumer.h>
++#include <linux/delay.h>
++#include <linux/jiffies.h>
++#include "fbtft.h"
++
++#define DRVNAME		"fb_uc8253"
++#define WIDTH		240
++#define HEIGHT		320
++#define LINE_BYTES	(WIDTH / 8)
++#define FRAME_BYTES	(LINE_BYTES * HEIGHT)
++
++/* Busy timeout. GxEPD2 waits up to 10 s; typical waits are 50 ms (power on),
++ * 700 ms (fast refresh) and 1100 ms (full refresh).
++ */
++#define BUSY_TIMEOUT_MS	10000
++
++/* UC8253 commands used here */
++#define CMD_PSR		0x00	/* panel setting */
++#define CMD_POF		0x02	/* power off */
++#define CMD_PON		0x04	/* power on */
++#define CMD_DTM1	0x10	/* data to "previous" RAM */
++#define CMD_DRF		0x12	/* display refresh */
++#define CMD_DTM2	0x13	/* data to "current" RAM */
++#define CMD_CDI		0x50	/* VCOM and data interval */
++#define CMD_PTL		0x90	/* partial window */
++#define CMD_PTIN	0x91	/* partial in */
++#define CMD_PTOUT	0x92	/* partial out */
++#define CMD_CCSET	0xE0	/* cascade setting */
++#define CMD_TSSET	0xE5	/* force temperature */
++
++struct uc8253 {
++	struct gpio_desc *busy;
++	bool power_on;
++	bool init_needed;
++	bool initial_refresh_done;
++};
++
++static int uc8253_wait_busy(struct fbtft_par *par)
++{
++	struct uc8253 *priv = par->extra;
++	unsigned long deadline = jiffies + msecs_to_jiffies(BUSY_TIMEOUT_MS);
++
++	msleep(1);	/* margin for the busy line to become active (GxEPD2) */
++	while (gpiod_get_value_cansleep(priv->busy)) {
++		if (time_after(jiffies, deadline)) {
++			dev_warn(par->info->device, "busy timeout\n");
++			return -ETIMEDOUT;
++		}
++		msleep(1);
++	}
++	return 0;
++}
++
++/* GxEPD2 _InitDisplay(): soft reset, then panel setting */
++static void uc8253_init_panel(struct fbtft_par *par)
++{
++	struct uc8253 *priv = par->extra;
++
++	write_reg(par, CMD_PSR, 0x1e, 0x0d);	/* soft reset */
++	msleep(1);
++	priv->power_on = false;
++	write_reg(par, CMD_PSR, 0x1f, 0x0d);	/* KW mode, OTP LUT */
++	priv->init_needed = false;
++}
++
++static void uc8253_ensure_init(struct fbtft_par *par)
++{
++	struct uc8253 *priv = par->extra;
++
++	if (priv->init_needed)
++		uc8253_init_panel(par);
++}
++
++static void uc8253_power_on(struct fbtft_par *par)
++{
++	struct uc8253 *priv = par->extra;
++
++	if (!priv->power_on) {
++		write_reg(par, CMD_PON);
++		uc8253_wait_busy(par);
++	}
++	priv->power_on = true;
++}
++
++/* GxEPD2 _setPartialRamArea(): full width, rows ys..ye inclusive */
++static void uc8253_set_window(struct fbtft_par *par, unsigned int ys,
++			      unsigned int ye)
++{
++	write_reg(par, CMD_PTL,
++		  0x00,			/* x start, byte aligned */
++		  (WIDTH - 1) | 0x07,	/* x end, last byte inclusive */
++		  ys / 256, ys % 256,
++		  ye / 256, ye % 256,
++		  0x01);
++}
++
++/* GxEPD2 _writeImage(): send rows ys..ye of a 1 bpp buffer to one RAM */
++static int uc8253_write_rows(struct fbtft_par *par, u8 cmd, const u8 *rows,
++			     unsigned int ys, unsigned int ye)
++{
++	int ret;
++
++	uc8253_ensure_init(par);
++	write_reg(par, CMD_PTIN);
++	uc8253_set_window(par, ys, ye);
++	write_reg(par, cmd);
++	ret = fbtft_write_buf_dc(par, (void *)rows,
++				 (ye - ys + 1) * LINE_BYTES, 1);
++	write_reg(par, CMD_PTOUT);
++	return ret;
++}
++
++/* GxEPD2 _Update_Full() */
++static void uc8253_refresh_full(struct fbtft_par *par)
++{
++	struct uc8253 *priv = par->extra;
++
++	write_reg(par, CMD_CCSET, 0x02);
++	write_reg(par, CMD_TSSET, 0x5a);
++	write_reg(par, CMD_CDI, 0x97);
++	uc8253_power_on(par);
++	write_reg(par, CMD_DRF);
++	uc8253_wait_busy(par);
++	priv->init_needed = true;
++}
++
++/* GxEPD2 refresh(x, y, w, h) with _Update_Part(): fast refresh of a window */
++static void uc8253_refresh_fast(struct fbtft_par *par, unsigned int ys,
++				unsigned int ye)
++{
++	struct uc8253 *priv = par->extra;
++
++	write_reg(par, CMD_PTIN);
++	uc8253_set_window(par, ys, ye);
++	write_reg(par, CMD_CCSET, 0x02);
++	write_reg(par, CMD_TSSET, 0x79);
++	write_reg(par, CMD_CDI, 0xd7);
++	uc8253_power_on(par);
++	write_reg(par, CMD_DRF);
++	uc8253_wait_busy(par);
++	priv->init_needed = true;
++	write_reg(par, CMD_PTOUT);
++}
++
++/* GxEPD2 _writeScreenBuffer(): fill one RAM with a value (0xff = white) */
++static int uc8253_fill_ram(struct fbtft_par *par, u8 cmd, u8 value)
++{
++	int ret;
++
++	uc8253_ensure_init(par);
++	memset(par->txbuf.buf, value, FRAME_BYTES);
++	write_reg(par, cmd);
++	ret = fbtft_write_buf_dc(par, par->txbuf.buf, FRAME_BYTES, 1);
++	return ret;
++}
++
++/* GxEPD2 _reset(), non-pulldown mode, with Meck's reset_duration of 2 ms */
++static void uc8253_reset(struct fbtft_par *par)
++{
++	if (!par->gpio.reset)
++		return;
++	gpiod_set_value_cansleep(par->gpio.reset, 0);	/* released */
++	msleep(10);
++	gpiod_set_value_cansleep(par->gpio.reset, 1);	/* asserted */
++	usleep_range(2000, 3000);
++	gpiod_set_value_cansleep(par->gpio.reset, 0);	/* released */
++	msleep(10);
++}
++
++static int init_display(struct fbtft_par *par)
++{
++	struct uc8253 *priv;
++	int ret;
++
++	priv = devm_kzalloc(par->info->device, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++	par->extra = priv;
++
++	priv->busy = devm_gpiod_get(par->info->device, "busy", GPIOD_IN);
++	if (IS_ERR(priv->busy)) {
++		dev_err(par->info->device, "missing 'busy' gpio\n");
++		return PTR_ERR(priv->busy);
++	}
++
++	/*
++	 * Start the framebuffer white, matching the cleared panel, so the
++	 * update fbtft does right after this does not paint the screen black
++	 * before the console draws its first frame.
++	 */
++	memset(par->info->screen_buffer, 0xff, par->info->fix.smem_len);
++
++	par->fbtftops.reset(par);
++	priv->init_needed = true;
++	uc8253_init_panel(par);
++
++	/* GxEPD2 clearScreen(): both RAMs white, one full refresh */
++	ret = uc8253_fill_ram(par, CMD_DTM1, 0xff);
++	if (ret < 0)
++		return ret;
++	ret = uc8253_fill_ram(par, CMD_DTM2, 0xff);
++	if (ret < 0)
++		return ret;
++	uc8253_refresh_full(par);
++	priv->initial_refresh_done = true;
++
++	return 0;
++}
++
++/*
++ * fbtft calls set_addr_win() then write_vmem() for the band of changed
++ * lines. The window is set inside write_vmem() itself, so this is a no-op
++ * (fbtft would otherwise substitute its ILI-style default, which would
++ * send commands this controller does not have).
++ */
++static void set_addr_win(struct fbtft_par *par, int xs, int ys, int xe, int ye)
++{
++}
++
++static int write_vmem(struct fbtft_par *par, size_t offset, size_t len)
++{
++	const u16 *vmem16 = (const u16 *)par->info->screen_buffer;
++	unsigned int line_length = par->info->fix.line_length;
++	unsigned int ys = offset / line_length;
++	unsigned int ye = (offset + len - 1) / line_length;
++	u8 *buf = par->txbuf.buf;
++	unsigned int y, x;
++	int ret;
++
++	if (ye >= HEIGHT)
++		ye = HEIGHT - 1;
++
++	/* RGB565 rows to 1 bpp: MSB is the leftmost pixel, 1 is white */
++	for (y = ys; y <= ye; y++) {
++		const u16 *row = vmem16 + y * WIDTH;
++
++		for (x = 0; x < WIDTH; x += 8) {
++			u8 b = 0;
++			unsigned int i;
++
++			for (i = 0; i < 8; i++) {
++				/* green channel, bits 5..10, half scale = 0x20 */
++				if (((row[x + i] >> 5) & 0x3f) >= 0x20)
++					b |= 0x80 >> i;
++			}
++			*buf++ = b;
++		}
++	}
++
++	ret = uc8253_write_rows(par, CMD_DTM2, par->txbuf.buf, ys, ye);
++	if (ret < 0)
++		goto out;
++	uc8253_refresh_fast(par, ys, ye);
++	/* GxEPD2 writeImageAgain(): make the new image the "previous" one */
++	ret = uc8253_write_rows(par, CMD_DTM1, par->txbuf.buf, ys, ye);
++out:
++	if (ret < 0)
++		dev_err(par->info->device, "write failed and returned: %d\n",
++			ret);
++	return ret;
++}
++
++static struct fbtft_display display = {
++	.regwidth = 8,
++	.width = WIDTH,
++	.height = HEIGHT,
++	.txbuflen = FRAME_BYTES,
++	.fps = 2,
++	.fbtftops = {
++		.init_display = init_display,
++		.set_addr_win = set_addr_win,
++		.write_vmem = write_vmem,
++		.reset = uc8253_reset,
++	},
++};
++
++FBTFT_REGISTER_DRIVER(DRVNAME, "ultrachip,uc8253", &display);
++
++MODULE_ALIAS("spi:" DRVNAME);
++MODULE_ALIAS("platform:" DRVNAME);
++MODULE_ALIAS("spi:uc8253");
++MODULE_ALIAS("platform:uc8253");
++
++MODULE_DESCRIPTION("FB driver for the UC8253 e-paper controller (GDEQ031T10)");
++MODULE_LICENSE("GPL");

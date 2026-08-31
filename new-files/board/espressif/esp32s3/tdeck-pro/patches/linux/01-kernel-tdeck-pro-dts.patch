@@ -1,15 +1,16 @@
 --- a/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	1970-01-01 00:00:00.000000000 +0000
-+++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-08-31 07:26:29.807003841 +0000
-@@ -0,0 +1,216 @@
++++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-08-31 10:08:08.720784027 +0000
+@@ -0,0 +1,243 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
-+ * LilyGo T-Deck Pro V1.1 (4G version) -- build two.
++ * LilyGo T-Deck Pro V1.1 (4G version) -- build three.
 + *
-+ * What this describes: the USB-C port as the Linux console, the WiFi link
-+ * to the core-0 firmware, an I2C bus on GPIO 13/14 with the TCA8418
-+ * keyboard controller on it, and the SD card slot on SPI2. Nothing else
-+ * on the board is touched: e-paper, touch, LoRa, GPS and the A7682E modem
-+ * all stay unconfigured and unpowered.
++ * What this describes: the e-paper as the Linux console (with the USB-C
++ * port as a second console), the WiFi link to the core-0 firmware, an I2C
++ * bus on GPIO 13/14 with the TCA8418 keyboard controller on it, and the SD
++ * card slot and the e-paper on SPI2. Nothing else on the board is touched:
++ * touch, LoRa, GPS and the A7682E modem all stay unconfigured and
++ * unpowered.
 + *
 + * Pin numbers come from the pelgraine/Meck T-Deck Pro variant and from
 + * LilyGo's V1.1 schematic (H693 H779 T-DeckPro V1.1 25-09-15).
@@ -24,12 +25,17 @@
 +/ {
 +	chosen {
 +		/*
-+		 * Console on the USB-Serial-JTAG peripheral (the USB-C port).
-+		 * esp32s3.dtsi lists that port as serial3, so it is ttyGS3.
-+		 * UART0 on GPIO 43/44 is wired to the GPS on this board and is
-+		 * deliberately not the console.
++		 * Two consoles: the USB-Serial-JTAG port (serial3 in
++		 * esp32s3.dtsi, so ttyGS3) and the e-paper (tty0). The last one
++		 * listed becomes /dev/console, where the login runs; the USB
++		 * port gets its own login from /etc/inittab. vt.color=0x70 is
++		 * black text on a white background, the natural look for
++		 * e-paper; consoleblank=0 stops the console blanking itself,
++		 * which on e-paper would just cost refreshes. UART0 on GPIO
++		 * 43/44 is wired to the GPS on this board and is deliberately
++		 * not a console.
 +		 */
-+		bootargs = "earlycon=esp32s3acm,mmio32,0x60038000 console=ttyGS3 rw root=mtd:rootfs no_hash_pointers ";
++		bootargs = "earlycon=esp32s3acm,mmio32,0x60038000 console=ttyGS3 console=tty0 vt.color=0x70 consoleblank=0 rw root=mtd:rootfs no_hash_pointers ";
 +	};
 +
 +	memory@0 {
@@ -63,10 +69,15 @@
 +		 *
 +		 * Key names chosen for the five non-letter keys:
 +		 *   Alt (row 2, col 9)   -> KEY_LEFTALT
-+		 *   $   (row 2, col 1)   -> KEY_DOLLAR
++		 *   $   (row 2, col 1)   -> KEY_YEN
 +		 *   Sym (row 3, col 1)   -> KEY_RIGHTALT (the usual "third level" key)
-+		 *   Mic (row 3, col 3)   -> KEY_VOICECOMMAND
++		 *   Mic (row 3, col 3)   -> KEY_LEFTMETA
 +		 *   the two shift keys   -> KEY_RIGHTSHIFT (col 0), KEY_LEFTSHIFT (col 4)
++		 * The console keymap (drivers/tty/vt/defkeymap.c_shipped, patched
++		 * for this board) only covers key codes below 256, so the $ and
++		 * Mic keys use two codes that the default map leaves unused; the
++		 * patched map gives them '$' and Sym+Mic = '0', and makes Sym
++		 * and both Shifts "sticky" one-shot modifiers, as in Meck.
 +		 */
 +		keyboard@34 {
 +			compatible = "ti,tca8418";
@@ -102,7 +113,7 @@
 +				MATRIX_KEY(1, 9, KEY_A)
 +				/* row 2: Enter $ M N B V C X Z Alt */
 +				MATRIX_KEY(2, 0, KEY_ENTER)
-+				MATRIX_KEY(2, 1, KEY_DOLLAR)
++				MATRIX_KEY(2, 1, KEY_YEN)
 +				MATRIX_KEY(2, 2, KEY_M)
 +				MATRIX_KEY(2, 3, KEY_N)
 +				MATRIX_KEY(2, 4, KEY_B)
@@ -115,7 +126,7 @@
 +				MATRIX_KEY(3, 0, KEY_RIGHTSHIFT)
 +				MATRIX_KEY(3, 1, KEY_RIGHTALT)
 +				MATRIX_KEY(3, 2, KEY_SPACE)
-+				MATRIX_KEY(3, 3, KEY_VOICECOMMAND)
++				MATRIX_KEY(3, 3, KEY_LEFTMETA)
 +				MATRIX_KEY(3, 4, KEY_LEFTSHIFT)
 +			>;
 +
@@ -127,12 +138,13 @@
 +
 +/*
 + * SPI2 pins. None of the T-Deck Pro's SPI pins sit on the FSPI positions
-+ * of the IO MUX (the devkit's 10..13), so all four signals go through the
-+ * GPIO matrix, the way the Box-3 device tree does it:
++ * of the IO MUX (the devkit's 10..13), so all signals go through the GPIO
++ * matrix, the way the Box-3 device tree does it:
 + *   SCK  GPIO36  signal 101 (FSPICLK)
 + *   MOSI GPIO33  signal 103 (FSPID)
 + *   MISO GPIO47  signal 102 (FSPIQ), input via the matrix
 + *   CS0  GPIO48  signal 110 (FSPICS0), the SD card
++ *   CS1  GPIO34  signal 111 (FSPICS1), the e-paper
 + * Signal numbers: ESP32-S3 TRM table "Peripheral Signals via GPIO Matrix".
 + */
 +&gpio_in_mux {
@@ -148,6 +160,7 @@
 +	spi2_gpio_out: spi2_gpio_out {
 +		pinctrl-single,pins = <
 +			GPIO_FUNC_OUT_SEL(48) 110	/* SPI2 CS0:  GPIO48, signal FSPICS0 */
++			GPIO_FUNC_OUT_SEL(34) 111	/* SPI2 CS1:  GPIO34, signal FSPICS1 */
 +			GPIO_FUNC_OUT_SEL(33) 103	/* SPI2 MOSI: GPIO33, signal FSPID */
 +			GPIO_FUNC_OUT_SEL(36) 101>;	/* SPI2 SCK:  GPIO36, signal FSPICLK */
 +	};
@@ -171,25 +184,22 @@
 +			PIN(33) (FUN_SEL(1) | FUN_DRV_40MA)			/* MOSI */
 +			PIN(36) (FUN_SEL(1) | FUN_DRV_40MA)			/* SCK */
 +			PIN(47) (FUN_SEL(1) | FUN_DRV_20MA | FUN_IE | FUN_WPU)	/* MISO */
-+			PIN(34) (FUN_SEL(1) | FUN_DRV_20MA)>;			/* e-paper CS, see gpio0 */
++			PIN(34) (FUN_SEL(1) | FUN_DRV_20MA)>;			/* CS1, e-paper */
++	};
++	epaper_pins: epaper_pins {
++		pinctrl-single,pins = <
++			PIN(35) (FUN_SEL(1) | FUN_DRV_20MA)			/* DC */
++			PIN(16) (FUN_SEL(1) | FUN_DRV_20MA)			/* RST */
++			PIN(37) (FUN_SEL(1) | FUN_DRV_20MA | FUN_IE)>;		/* BUSY */
 +	};
 +};
 +
 +&gpio0 {
 +	status = "ok";
-+
 +	/*
-+	 * The e-paper shares SCK and MOSI with the SD card. Hold its chip
-+	 * select high so it ignores SD traffic; it has no driver in this
-+	 * build. The LoRa module shares the bus too but is unpowered
-+	 * (its enable, GPIO46, is left low), so its select is left alone.
++	 * The LoRa module shares the SPI bus but is unpowered (its enable,
++	 * GPIO46, is left low), so its chip select is left alone.
 +	 */
-+	eink_cs_idle {
-+		gpio-hog;
-+		gpios = <34 GPIO_ACTIVE_HIGH>;
-+		output-high;
-+		line-name = "eink-cs-idle";
-+	};
 +};
 +
 +&spi2 {
@@ -200,6 +210,23 @@
 +	mmc_spi@0 {
 +		compatible = "mmc-spi-slot";
 +		reg = <0>;
++	};
++
++	/*
++	 * GDEQ031T10 e-paper (UC8253 controller), driven by fb_uc8253 with
++	 * Meck's settings: 4 MHz, SPI mode 0, DC on GPIO35, reset on GPIO16
++	 * (active low), busy on GPIO37 (low while busy).
++	 */
++	epaper@1 {
++		compatible = "ultrachip,uc8253";
++		reg = <1>;
++		spi-max-frequency = <4000000>;
++		dc-gpios = <&gpio0 35 GPIO_ACTIVE_HIGH>;
++		reset-gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
++		busy-gpios = <&gpio0 37 GPIO_ACTIVE_LOW>;
++
++		pinctrl-0 = <&epaper_pins>;
++		pinctrl-names = "default";
 +	};
 +};
 +
