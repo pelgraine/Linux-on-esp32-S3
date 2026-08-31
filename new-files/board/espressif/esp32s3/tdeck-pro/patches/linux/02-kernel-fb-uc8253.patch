@@ -29,10 +29,10 @@ index e9cdf0f0a..4ec1dacfd 100644
  obj-$(CONFIG_FB_TFT_UPD161704)   += fb_upd161704.o
 diff --git a/drivers/staging/fbtft/fb_uc8253.c b/drivers/staging/fbtft/fb_uc8253.c
 new file mode 100644
-index 000000000..bc6cb987a
+index 000000000..ac1566447
 --- /dev/null
 +++ b/drivers/staging/fbtft/fb_uc8253.c
-@@ -0,0 +1,317 @@
+@@ -0,0 +1,318 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * FB driver for the UltraChip UC8253 e-paper controller driving the
@@ -329,6 +329,7 @@ index 000000000..bc6cb987a
 +
 +static struct fbtft_display display = {
 +	.regwidth = 8,
++	.buswidth = 8,
 +	.width = WIDTH,
 +	.height = HEIGHT,
 +	.txbuflen = FRAME_BYTES,
