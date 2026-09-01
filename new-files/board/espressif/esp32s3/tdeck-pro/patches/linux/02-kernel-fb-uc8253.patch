@@ -29,10 +29,10 @@ index e9cdf0f0a..4ec1dacfd 100644
  obj-$(CONFIG_FB_TFT_UPD161704)   += fb_upd161704.o
 diff --git a/drivers/staging/fbtft/fb_uc8253.c b/drivers/staging/fbtft/fb_uc8253.c
 new file mode 100644
-index 000000000..ac1566447
+index 000000000..f2c3130b0
 --- /dev/null
 +++ b/drivers/staging/fbtft/fb_uc8253.c
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,327 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * FB driver for the UltraChip UC8253 e-paper controller driving the
@@ -286,6 +286,7 @@ index 000000000..ac1566447
 +
 +static int write_vmem(struct fbtft_par *par, size_t offset, size_t len)
 +{
++	struct uc8253 *priv = par->extra;
 +	const u16 *vmem16 = (const u16 *)par->info->screen_buffer;
 +	unsigned int line_length = par->info->fix.line_length;
 +	unsigned int ys = offset / line_length;
@@ -320,6 +321,14 @@ index 000000000..ac1566447
 +	uc8253_refresh_fast(par, ys, ye);
 +	/* GxEPD2 writeImageAgain(): make the new image the "previous" one */
 +	ret = uc8253_write_rows(par, CMD_DTM1, par->txbuf.buf, ys, ye);
++	/*
++	 * Start the next update with the soft reset and panel setting too,
++	 * so a reset of the panel behind the driver's back (which returns
++	 * it to its default scan direction and colour mode) cannot leave the
++	 * next write going into a panel set up differently from what the
++	 * driver assumes. GxEPD2 relies on nothing resetting the panel.
++	 */
++	priv->init_needed = true;
 +out:
 +	if (ret < 0)
 +		dev_err(par->info->device, "write failed and returned: %d\n",

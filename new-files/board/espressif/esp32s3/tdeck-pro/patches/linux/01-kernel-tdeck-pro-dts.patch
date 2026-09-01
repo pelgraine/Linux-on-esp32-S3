@@ -1,6 +1,6 @@
 --- a/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	1970-01-01 00:00:00.000000000 +0000
-+++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-09-01 07:33:23.575001836 +0000
-@@ -0,0 +1,250 @@
++++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-09-01 09:51:04.668990964 +0000
+@@ -0,0 +1,273 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * LilyGo T-Deck Pro V1.1 (4G version) -- build three.
@@ -8,9 +8,9 @@
 + * What this describes: the e-paper as the Linux console (with the USB-C
 + * port as a second console), the WiFi link to the core-0 firmware, an I2C
 + * bus on GPIO 13/14 with the TCA8418 keyboard controller on it, and the SD
-+ * card slot and the e-paper on SPI2. Nothing else on the board is touched:
-+ * touch, LoRa, GPS and the A7682E modem all stay unconfigured and
-+ * unpowered.
++ * card slot and the e-paper on SPI2. The LoRa radio is powered (its
++ * supply also feeds the e-paper) but has no driver and its chip select is
++ * parked. Touch, GPS and the A7682E modem stay unconfigured and unpowered.
 + *
 + * Pin numbers come from the pelgraine/Meck T-Deck Pro variant and from
 + * LilyGo's V1.1 schematic (H693 H779 T-DeckPro V1.1 25-09-15).
@@ -200,10 +200,33 @@
 +
 +&gpio0 {
 +	status = "ok";
++
 +	/*
-+	 * The LoRa module shares the SPI bus but is unpowered (its enable,
-+	 * GPIO46, is left low), so its chip select is left alone.
++	 * GPIO46 ("LoRa power" in Meck and in LilyGo's firmware, both of
++	 * which raise it at boot) also feeds the e-paper: with it low the
++	 * panel is unpowered, BUSY stays low and nothing renders; with it
++	 * high the panel behaves (established by direct test on the board).
++	 * Hold it high from the moment the GPIO controller comes up, well
++	 * before the display driver probes.
 +	 */
++	lora_epaper_power {
++		gpio-hog;
++		gpios = <46 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "lora-epaper-power";
++	};
++
++	/*
++	 * The LoRa radio shares the SPI bus and is now powered. Its chip
++	 * select must sit high or it answers the SD card's and the panel's
++	 * traffic (seen as "SPI card removed"). No driver claims it yet.
++	 */
++	lora_cs_idle {
++		gpio-hog;
++		gpios = <3 GPIO_ACTIVE_HIGH>;
++		output-high;
++		line-name = "lora-cs-idle";
++	};
 +};
 +
 +&spi2 {
