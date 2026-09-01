@@ -1,6 +1,6 @@
 --- a/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	1970-01-01 00:00:00.000000000 +0000
-+++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-08-31 10:08:08.720784027 +0000
-@@ -0,0 +1,243 @@
++++ b/arch/xtensa/boot/dts/esp32s3-tdeck-pro.dts	2026-09-01 07:33:23.575001836 +0000
+@@ -0,0 +1,250 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * LilyGo T-Deck Pro V1.1 (4G version) -- build three.
@@ -144,7 +144,12 @@
 + *   MOSI GPIO33  signal 103 (FSPID)
 + *   MISO GPIO47  signal 102 (FSPIQ), input via the matrix
 + *   CS0  GPIO48  signal 110 (FSPICS0), the SD card
-+ *   CS1  GPIO34  signal 111 (FSPICS1), the e-paper
++ * The e-paper's chip select (GPIO34) is NOT a hardware select: a hardware
++ * select other than CS0 drives its pad only during its own transfers and
++ * floats otherwise, and the panel treated that as "selected" and executed
++ * the SD card's traffic as commands. It is a GPIO select instead (cs-gpios
++ * below), which the SPI core holds high whenever the panel is not being
++ * addressed, plus a pull-up so the pad is high before the controller starts.
 + * Signal numbers: ESP32-S3 TRM table "Peripheral Signals via GPIO Matrix".
 + */
 +&gpio_in_mux {
@@ -160,7 +165,6 @@
 +	spi2_gpio_out: spi2_gpio_out {
 +		pinctrl-single,pins = <
 +			GPIO_FUNC_OUT_SEL(48) 110	/* SPI2 CS0:  GPIO48, signal FSPICS0 */
-+			GPIO_FUNC_OUT_SEL(34) 111	/* SPI2 CS1:  GPIO34, signal FSPICS1 */
 +			GPIO_FUNC_OUT_SEL(33) 103	/* SPI2 MOSI: GPIO33, signal FSPID */
 +			GPIO_FUNC_OUT_SEL(36) 101>;	/* SPI2 SCK:  GPIO36, signal FSPICLK */
 +	};
@@ -184,7 +188,7 @@
 +			PIN(33) (FUN_SEL(1) | FUN_DRV_40MA)			/* MOSI */
 +			PIN(36) (FUN_SEL(1) | FUN_DRV_40MA)			/* SCK */
 +			PIN(47) (FUN_SEL(1) | FUN_DRV_20MA | FUN_IE | FUN_WPU)	/* MISO */
-+			PIN(34) (FUN_SEL(1) | FUN_DRV_20MA)>;			/* CS1, e-paper */
++			PIN(34) (FUN_SEL(1) | FUN_DRV_20MA | FUN_WPU)>;		/* e-paper CS (GPIO select) */
 +	};
 +	epaper_pins: epaper_pins {
 +		pinctrl-single,pins = <
@@ -205,6 +209,8 @@
 +&spi2 {
 +	pinctrl-0 = <&spi2_pins &spi2_gpio_out &spi2_gpio_in>;
 +	pinctrl-names = "default";
++	/* index 0: the SD card's hardware CS0; index 1: the e-paper on GPIO34 */
++	cs-gpios = <0>, <&gpio0 34 GPIO_ACTIVE_LOW>;
 +	status = "ok";
 +
 +	mmc_spi@0 {
@@ -214,8 +220,9 @@
 +
 +	/*
 +	 * GDEQ031T10 e-paper (UC8253 controller), driven by fb_uc8253 with
-+	 * Meck's settings: 4 MHz, SPI mode 0, DC on GPIO35, reset on GPIO16
-+	 * (active low), busy on GPIO37 (low while busy).
++	 * Meck's settings: 4 MHz, SPI mode 0, CS on GPIO34 (via cs-gpios
++	 * above), DC on GPIO35, reset on GPIO16 (active low), busy on GPIO37
++	 * (low while busy).
 +	 */
 +	epaper@1 {
 +		compatible = "ultrachip,uc8253";
